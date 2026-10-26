@@ -197,7 +197,7 @@ export function ProgramMessagesPartnerPageClient() {
 
   if (errorMessages) redirect(`/${workspaceSlug}/program/messages`);
 
-  const defaultMessage = decodeURIComponent(searchParams.get("message") || "");
+  const defaultMessage = searchParams.get("message") || "";
 
   return (
     <div
