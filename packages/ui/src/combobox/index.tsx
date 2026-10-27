@@ -179,7 +179,7 @@ export function Combobox({
           ]
         : options;
     },
-    [selected],
+    [selected, preserveOrder],
   );
 
   // Actually sort the options when needed
@@ -190,10 +190,20 @@ export function Combobox({
     }
   }, [shouldSortOptions, options, sortOptions, search]);
 
+  const optionsValuesKey = JSON.stringify(options?.map((o) => o.value));
+  const selectedValuesKey = JSON.stringify(selected.map((s) => s.value));
+
   // Sort options when the options prop changes
   useEffect(() => {
     setShouldSortOptions(true);
-  }, [JSON.stringify(options?.map((o) => o.value))]);
+  }, [optionsValuesKey]);
+
+  // Re-sort options when selected or preserveOrder changes while the popover is closed
+  useEffect(() => {
+    if (!isOpen) {
+      setShouldSortOptions(true);
+    }
+  }, [isOpen, selectedValuesKey, preserveOrder]);
 
   // Reset search and sort options when the popover closes
   useEffect(() => {
