@@ -287,10 +287,11 @@ export function QRCodeDesignFields({
           id={`${id}-marker`}
           label="Marker Color"
           tooltip="Set a different color for the finder pattern markers. Defaults to the QR code color."
-          color={data.markerColor ?? data.fgColor}
+          color={data.markerColor ?? null}
           onChange={(color) =>
             setData((d) => ({ ...d, markerColor: color ?? undefined }))
           }
+          showDefault
         />
       </div>
 
@@ -386,12 +387,14 @@ function ColorSection({
   tooltip,
   color,
   onChange,
+  showDefault = false,
 }: {
   id: string;
   label: string;
   tooltip?: string;
-  color: string;
+  color?: string | null;
   onChange: (color: string | null) => void;
+  showDefault?: boolean;
 }) {
   return (
     <div className="flex h-10 items-center justify-between gap-2">
@@ -404,9 +407,9 @@ function ColorSection({
       <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-neutral-100">
         <ColorPicker
           id={id}
-          value={color}
+          value={color ?? null}
           onChange={onChange}
-          showDefault
+          showDefault={showDefault}
           side="top"
           debounceMs={500}
         />

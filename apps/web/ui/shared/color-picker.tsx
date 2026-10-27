@@ -164,21 +164,36 @@ export function ColorSelector({
   id?: string;
   className?: string;
 }) {
+  const [localColor, setLocalColor] = useState(value);
+
+  useEffect(() => {
+    setLocalColor(value);
+  }, [value]);
+
   const debouncedOnChange = useDebouncedCallback(
     (color: string) => onChange(color),
     debounceMs ?? 0,
   );
-  const onPickerChange = debounceMs ? debouncedOnChange : onChange;
+
+  const handlePickerChange = (color: string) => {
+    setLocalColor(color);
+    if (debounceMs) {
+      debouncedOnChange(color);
+    } else {
+      onChange(color);
+    }
+  };
 
   // Flush any pending debounced change on unmount (e.g. the popover closing
   // mid-debounce) so the last gradient/hex change isn't lost
   useEffect(() => () => debouncedOnChange.flush(), [debouncedOnChange]);
 
-  const onSwatchSelect = (value: string | null, e?: MouseEvent) => {
+  const onSwatchSelect = (swatchValue: string | null, e?: MouseEvent) => {
     // Drop any pending debounced change so it can't fire after (and overwrite)
     // this selection
     debouncedOnChange.cancel();
-    onSelect ? onSelect(value, e) : onChange(value);
+    setLocalColor(swatchValue);
+    onSelect ? onSelect(swatchValue, e) : onChange(swatchValue);
   };
 
   const hasSwatches = Boolean(showDefault || swatches?.length);
@@ -201,8 +216,8 @@ export function ColorSelector({
               )}
             >
               <HexColorPicker
-                color={value ?? "#000000"}
-                onChange={onPickerChange}
+                color={localColor ?? "#000000"}
+                onChange={handlePickerChange}
               />
             </div>
             {hasSwatches && <div className="h-px w-full bg-neutral-200" />}
@@ -213,7 +228,7 @@ export function ColorSelector({
             {showDefault && (
               <Swatch
                 name="Default"
-                selected={!value}
+                selected={!localColor}
                 onSelect={(e) => onSwatchSelect(null, e)}
               />
             )}
@@ -223,7 +238,8 @@ export function ColorSelector({
                 swatch={swatch}
                 name={swatch.name}
                 selected={
-                  !!value && swatch.value.toLowerCase() === value.toLowerCase()
+                  !!localColor &&
+                  swatch.value.toLowerCase() === localColor.toLowerCase()
                 }
                 onSelect={(e) => onSwatchSelect(swatch.value, e)}
               />
@@ -232,7 +248,7 @@ export function ColorSelector({
         )}
       </div>
       {showHexInput && (
-        <HexInputField id={id} value={value} onChange={onPickerChange} />
+        <HexInputField id={id} value={localColor} onChange={handlePickerChange} />
       )}
     </div>
   );
