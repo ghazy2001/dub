@@ -163,4 +163,51 @@ describe("getHtml response size limit", () => {
 
     await expect(getHtml(URL)).resolves.toBe("<title>café 🔗</title>");
   });
+
+  it("decodes non-UTF-8 charset from Content-Type header", async () => {
+    const sjisBytes = new Uint8Array([
+      ...new TextEncoder().encode("<html><head><title>"),
+      0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea, 0x82, 0xcc, 0x83, 0x5e, 0x83, 0x43,
+      0x83, 0x67, 0x83, 0x8b,
+      ...new TextEncoder().encode("</title></head>"),
+    ]);
+    vi.mocked(safeFetch).mockResolvedValue(
+      new Response(sjisBytes, {
+        headers: { "content-type": "text/html; charset=shift_jis" },
+      }),
+    );
+
+    const html = await getHtml(URL);
+    expect(html).toContain("日本語のタイトル");
+  });
+
+  it("detects and decodes non-UTF-8 charset from <meta charset> tag", async () => {
+    const sjisMetaBytes = new Uint8Array([
+      ...new TextEncoder().encode('<html><head><meta charset="shift_jis"><title>'),
+      0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea, 0x82, 0xcc, 0x83, 0x5e, 0x83, 0x43,
+      0x83, 0x67, 0x83, 0x8b,
+      ...new TextEncoder().encode("</title></head>"),
+    ]);
+    vi.mocked(safeFetch).mockResolvedValue(
+      new Response(sjisMetaBytes, {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    const html = await getHtml(URL);
+    expect(html).toContain("日本語のタイトル");
+  });
+
+  it("falls back to UTF-8 on unknown charset in Content-Type or meta tag", async () => {
+    const html =
+      '<html><head><meta charset="invalid-charset-xyz"><title>Fallback</title></head>';
+    vi.mocked(safeFetch).mockResolvedValue(
+      new Response(html, {
+        headers: { "content-type": "text/html; charset=unknown-encoding" },
+      }),
+    );
+
+    const result = await getHtml(URL);
+    expect(result).toBe(html);
+  });
 });

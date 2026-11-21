@@ -4,7 +4,6 @@ import {
   linkPreviewImageBase64PrefixRegex,
   publicHostedImageSchema,
 } from "@/lib/zod/schemas/images";
-import { isValidUrl } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
 import he from "he";
 import { parse } from "node-html-parser";
@@ -14,19 +13,48 @@ import { parse } from "node-html-parser";
 export const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
 
 const HEAD_END_REGEX = /<\/head\s*>/i;
+const CHARSET_REGEX = /<meta\s+[^>]*?charset\s*=\s*['"]?([a-zA-Z0-9_\-]+)['"]?/i;
+const HTTP_EQUIV_CHARSET_REGEX =
+  /<meta\s+[^>]*?content\s*=\s*['"][^'"]*?charset\s*=\s*([a-zA-Z0-9_\-]+)['"]?/i;
 
-// Reads the body as UTF-8 text up to the end of the <head>, because getMetaTags
+const getCharsetFromContentType = (
+  contentType: string | null,
+): string | null => {
+  if (!contentType) return null;
+  const match = /charset\s*=\s*['"]?([a-zA-Z0-9_\-]+)['"]?/i.exec(contentType);
+  return match ? match[1] : null;
+};
+
+const createTextDecoder = (encoding?: string | null): TextDecoder => {
+  if (encoding) {
+    try {
+      return new TextDecoder(encoding.trim());
+    } catch {
+      // Unknown or unsupported encoding, fallback to UTF-8
+    }
+  }
+  return new TextDecoder("utf-8");
+};
+
+// Reads the body as text up to the end of the <head>, because getMetaTags
 // needs only the meta, title and link tags. Reads at most maxBytes, so a page
 // with no </head> near the start is cut at maxBytes.
-const readHtmlHead = async (response: Response, maxBytes: number) => {
+export const readHtmlHead = async (response: Response, maxBytes: number) => {
   if (!response.body) {
     return "";
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let bytesRead = 0;
   let text = "";
+
+  const headerCharset = getCharsetFromContentType(
+    response.headers.get("content-type"),
+  );
+
+  let decoder = createTextDecoder(headerCharset);
+  let detectedCharset = headerCharset;
+  const chunks: Uint8Array[] = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -38,11 +66,41 @@ const readHtmlHead = async (response: Response, maxBytes: number) => {
     const bytes =
       value.byteLength > remaining ? value.subarray(0, remaining) : value;
     bytesRead += bytes.byteLength;
+    chunks.push(bytes);
 
     const atLimit = bytesRead >= maxBytes;
-    // Search a few characters back, in case </head> is split across chunks.
     const searchFrom = Math.max(0, text.length - "</head>".length);
-    text += decoder.decode(bytes, { stream: !atLimit });
+
+    if (!detectedCharset) {
+      let sampleLength = 0;
+      for (const c of chunks) sampleLength += c.byteLength;
+      const sampleBytes = new Uint8Array(Math.min(sampleLength, 2048));
+      let offset = 0;
+      for (const c of chunks) {
+        const toCopy = Math.min(c.byteLength, sampleBytes.length - offset);
+        sampleBytes.set(c.subarray(0, toCopy), offset);
+        offset += toCopy;
+        if (offset >= sampleBytes.length) break;
+      }
+      const sampleText = new TextDecoder("latin1").decode(sampleBytes);
+      const metaMatch =
+        CHARSET_REGEX.exec(sampleText) ||
+        HTTP_EQUIV_CHARSET_REGEX.exec(sampleText);
+
+      if (metaMatch) {
+        detectedCharset = metaMatch[1];
+        decoder = createTextDecoder(detectedCharset);
+        text = "";
+        for (let i = 0; i < chunks.length; i++) {
+          const isLast = atLimit && i === chunks.length - 1;
+          text += decoder.decode(chunks[i], { stream: !isLast });
+        }
+      } else {
+        text += decoder.decode(bytes, { stream: !atLimit });
+      }
+    } else {
+      text += decoder.decode(bytes, { stream: !atLimit });
+    }
 
     const headEnd = HEAD_END_REGEX.exec(text.slice(searchFrom));
     if (headEnd) {
@@ -100,7 +158,7 @@ export const getHtml = async (url: string) => {
   }
 };
 
-export const getHeadChildNodes = (html) => {
+export const getHeadChildNodes = (html: string) => {
   const ast = parse(html); // parse the html into AST format with node-html-parser
   const metaTags = ast.querySelectorAll("meta").map(({ attributes }) => {
     const property = attributes.property || attributes.name || attributes.href;
@@ -117,8 +175,9 @@ export const getHeadChildNodes = (html) => {
       href,
     };
   });
+  const baseHref = ast.querySelector("base")?.getAttribute("href") || null;
 
-  return { metaTags, title, linkTags };
+  return { metaTags, title, linkTags, baseHref };
 };
 
 export const getRelativeUrl = (url: string, imageUrl: string) => {
@@ -127,13 +186,7 @@ export const getRelativeUrl = (url: string, imageUrl: string) => {
   }
   let resolved: string;
   try {
-    resolved = isValidUrl(imageUrl)
-      ? new URL(imageUrl).toString()
-      : (() => {
-          const { protocol, host } = new URL(url);
-          const baseURL = `${protocol}//${host}`;
-          return new URL(imageUrl, baseURL).toString();
-        })();
+    resolved = new URL(imageUrl, url).toString();
   } catch {
     return null;
   }
@@ -184,7 +237,21 @@ export const getMetaTags = async (url: string) => {
     return generateFallbackMetadata(url);
   }
 
-  const { metaTags, title: titleTag, linkTags } = getHeadChildNodes(html);
+  const {
+    metaTags,
+    title: titleTag,
+    linkTags,
+    baseHref,
+  } = getHeadChildNodes(html);
+
+  let targetUrl = url;
+  if (baseHref) {
+    try {
+      targetUrl = new URL(baseHref, url).toString();
+    } catch {
+      // ignore invalid baseHref and fallback to url
+    }
+  }
 
   let object = {};
 
@@ -223,6 +290,6 @@ export const getMetaTags = async (url: string) => {
   return {
     title: title || url,
     description: description || "No description",
-    image: getRelativeUrl(url, image),
+    image: getRelativeUrl(targetUrl, image),
   };
 };
